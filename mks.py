@@ -29,7 +29,7 @@ from pyVmomi import vim
 requests.packages.urllib3.disable_warnings()
 
 def err(msg):
-    sys.stderr.write(msg)
+    sys.stderr.write(msg + '\n')
     sys.exit(1)
 
 def parse(url):
@@ -42,11 +42,18 @@ def parse(url):
         err('Invalid URL: missing hostname')
     if not p.path:
         err('Invalid URL: missing path')
+    query = p.query
+    if not query:
+        if p.path.startswith("/?"):
+            # http://bugs.python.org/issue9374
+            query = p.path[2:]
+        else:
+            err('Invalid URL: missing query')
     port = p.port if p.port else 443
     pwd = p.password
     if not pwd:
         pwd = getpass.getpass()
-    return p.username, pwd, p.hostname, port, p.path
+    return p.username, pwd, p.hostname, port, query
 
 def main():
     parser = argparse.ArgumentParser()
@@ -58,16 +65,16 @@ def main():
                     type=int, default=6090)
     args = parser.parse_args()
 
-    user, pwd, host, port, path = parse(args.url)
+    user, pwd, host, port, query = parse(args.url)
     si = connect.SmartConnect(host=host, user=user, pwd=pwd, port=port)
     atexit.register(connect.Disconnect, si)
 
     vm = None
-    if path.startswith('/?uuid='):
-        uuid = path[7:]
+    if query.startswith('uuid='):
+        uuid = query[5:]
         vm = si.content.searchIndex.FindByUuid(None, uuid, True, True)
-    elif path.startswith('/?name='):
-        name = path[7:]
+    elif query.startswith('name='):
+        name = query[5:]
         content = si.content
         objView = content.viewManager.CreateContainerView(content.rootFolder,
                                                           [vim.VirtualMachine],
@@ -79,7 +86,7 @@ def main():
                 break
         objView.Destroy()
     else:
-        err('Unsupported VM path: ' + path)
+        err('Unsupported VM identifier: ' + query)
 
     if not vm:
         err('Cannot find the specified VM')
