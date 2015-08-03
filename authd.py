@@ -19,7 +19,7 @@ import socket
 import ssl
 import base64
 import hashlib
-import string
+import os
 import random
 
 VMAD_OK = 200
@@ -34,9 +34,10 @@ VMAD_CONNECT_CMD = "CONNECT"
 
 def expect(sock, code):
     line = sock.recv(1024)
-    recv_code = int(line.split()[0])
-    if code != recv_code:
+    recv_code, msg = line.split()[0:2]
+    if code != int(recv_code):
         raise Exception('Expected %d but received %d' % (code, recv_code))
+    return msg
 
 
 def handshake(host, port, ticket, cfg_file, thumbprint):
@@ -54,16 +55,21 @@ def handshake(host, port, ticket, cfg_file, thumbprint):
     expect(sock, VMAD_NEEDPASSWD)
     sock.write("%s %s\r\n" % (VMAD_PASS_CMD, ticket))
     expect(sock, VMAD_LOGINOK)
-    alphabet = string.ascii_letters + string.digits
-    rand = ''.join(random.SystemRandom().choice(alphabet) for _ in range(12))
+    rand = os.urandom(12)
     rand = base64.b64encode(rand)
     sock.write("%s %s\r\n" % (VMAD_THUMB_CMD, rand))
-    expect(sock, VMAD_OK)
+    thumbprint2 = expect(sock, VMAD_OK)
+    thumbprint2 = thumbprint2.replace(':', '').lower()
     sock.write("%s %s mks\r\n" % (VMAD_CONNECT_CMD, cfg_file))
     expect(sock, VMAD_OK)
-    sock = ssl.wrap_socket(sock)
-    sock.write(rand)
-    return sock
+    sock2 = ssl.wrap_socket(sock)
+    cert2 = sock2.getpeercert(binary_form=True)
+    h = hashlib.sha1()
+    h.update(cert2)
+    if thumbprint2 != h.hexdigest():
+        raise Exception("Second thumbprint doesn't match")
+    sock2.write(rand)
+    return sock2
 
 class AuthdRequestHandler(websockify.ProxyRequestHandler):
 
